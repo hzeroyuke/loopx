@@ -253,7 +253,12 @@ class BenchmarkCodex(CodexOffline):
             install = await self.exec_as_agent(
                 environment,
                 command=f"bash {_SRC}/scripts/install-local.sh",
-                env=self._profile_env(),
+                # Task containers may lack git; the chat bundle build records
+                # the staged source revision from this environment fallback.
+                env={
+                    **self._profile_env(),
+                    "LOOPX_RESOLVED_SOURCE_GIT_COMMIT": actual_commit,
+                },
                 timeout_sec=1200,
             )
             if "error" in (install.stderr or "").lower():
