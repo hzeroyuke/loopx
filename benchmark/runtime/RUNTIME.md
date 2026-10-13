@@ -79,6 +79,31 @@ The runner supplies no HEAD-moved/clean-worktree/exit-only substitute and never
 calls hidden benchmark verification to provide intermediate feedback. Independent
 validator protection remains the environment owner's responsibility.
 
+## Offline and git-less task images
+
+Task containers are often slim images without a git binary or any route to
+package registries. The LoopX install inside a trial stays offline when the
+host prepares two inputs before staging:
+
+- Build the Chat bundle once on the host with `python3 scripts/chat_bundle.py
+  ensure`. Source staging validates the prepared `loopx/web/chat` delivery
+  against its manifest and carries it into the archive, so in-container
+  installation never needs `npm ci` or a registry. Without a prepared bundle,
+  the in-container build records the staged source revision through
+  `LOOPX_RESOLVED_SOURCE_GIT_COMMIT`, which the Harbor adapter supplies from
+  the commit it verified during staging; a missing git binary takes the same
+  fallback as a failed `rev-parse`.
+- Models served through gateway aliases that the pinned Codex binary does not
+  ship in its built-in catalog get only the bare `exec` tool: `web_search`,
+  `apply_patch`, `update_plan` and `write_stdin` are silently omitted from
+  every request, and the `web_search` setting has no effect. Stage a
+  `model-catalog.json` next to the offline Codex binary
+  (`CODEX_OFFLINE_DIR`); the installer copies it into the container and the
+  trial home references it via `model_catalog_json`. The `web_search` agent
+  kwarg then takes effect in the shared runtime (default remains
+  `disabled`). The catalog declares capabilities only; the requested model is
+  unchanged.
+
 ## Task entry and planning ablation
 
 `task_entry` is independent of the execution mode:
