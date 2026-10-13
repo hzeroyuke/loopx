@@ -78,11 +78,19 @@ def prepare_codex_home(
     api_key: str,
     wire_api: str,
     skills: Path | None,
+    web_search: str = "disabled",
+    model_catalog: Path | None = None,
 ) -> None:
     """Materialize fixed inputs once; never delete sessions between iterations.
 
     A different effective configuration requires a different trial. Secrets are
     kept out of the settings identity and may rotate without resetting history.
+
+    ``model_catalog`` is required for slugs Codex does not ship built-in
+    (e.g. gateway aliases such as ``gpt-5.6-sol``). Without a catalog entry
+    Codex treats the model as unknown and offers only ``exec``; ``web_search``,
+    ``apply_patch``, ``update_plan`` and ``write_stdin`` are silently omitted
+    from every request, so the ``web_search`` setting has no effect.
     """
     if not model or not effort:
         raise ValueError("model and effort are required")
@@ -92,14 +100,25 @@ def prepare_codex_home(
         raise ValueError("provide a gateway and API key, or stage CODEX_AUTH_JSON_PATH")
     if wire_api not in {"responses", "chat"}:
         raise ValueError("unsupported provider wire_api")
+    if web_search not in {"disabled", "cached", "live"}:
+        raise ValueError("unsupported web_search setting")
+    if model_catalog is not None and not model_catalog.is_file():
+        raise ValueError(f"model catalog missing: {model_catalog}")
     home.mkdir(parents=True, exist_ok=True)
     settings = "\n".join(
         [
             f"model = {json.dumps(model)}",
             f"model_reasoning_effort = {json.dumps(effort)}",
+        ]
+        + (
+            [f"model_catalog_json = {json.dumps(str(model_catalog))}"]
+            if model_catalog is not None
+            else []
+        )
+        + [
             'approval_policy = "never"',
             f"sandbox_mode = {json.dumps(execution.sandbox)}",
-            'web_search = "disabled"',
+            f"web_search = {json.dumps(web_search)}",
             f'model_provider = "{"harbor" if base_url else "openai"}"',
             # Codex filters its inherited shell environment. Set the trial
             # policy explicitly so model tools cannot silently lose it.
