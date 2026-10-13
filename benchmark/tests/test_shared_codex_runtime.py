@@ -644,3 +644,55 @@ def test_missing_task_path_fails_before_install(tmp_path, monkeypatch, stdout, r
     monkeypatch.setattr(CodexOffline, "install", unexpected)
     with pytest.raises(RuntimeError, match="task container PATH"):
         asyncio.run(agent.install(SimpleNamespace(exec=task_exec)))
+
+
+def test_trial_home_stages_model_catalog_and_honors_web_search(tmp_path):
+    catalog = tmp_path / "model-catalog.json"
+    catalog.write_text("{}")
+    args = settings(tmp_path) | {"web_search": "live", "model_catalog": catalog}
+    prepare_codex_home(**args)
+    config = tomllib.loads((args["home"] / "config.toml").read_text())
+    assert config["model_catalog_json"] == str(catalog)
+    assert config["web_search"] == "live"
+    defaults = settings(tmp_path) | {"home": tmp_path / "default-home"}
+    prepare_codex_home(**defaults)
+    rendered = tomllib.loads((defaults["home"] / "config.toml").read_text())
+    assert rendered["web_search"] == "disabled"
+    assert "model_catalog_json" not in rendered
+    with pytest.raises(ValueError, match="web_search"):
+        prepare_codex_home(**(settings(tmp_path) | {
+            "home": tmp_path / "ws-home", "web_search": "on"}))
+    with pytest.raises(ValueError, match="model catalog missing"):
+        prepare_codex_home(**(settings(tmp_path) | {
+            "home": tmp_path / "missing-home",
+            "model_catalog": tmp_path / "absent.json"}))
+
+
+def test_chat_bundle_revision_survives_missing_git_binary(tmp_path, monkeypatch):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "chat_bundle_script", Path(__file__).resolve().parents[2] / "scripts/chat_bundle.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setenv("LOOPX_RESOLVED_SOURCE_GIT_COMMIT", "feedbeef")
+
+    def missing(*args, **kwargs):
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr(module.subprocess, "run", missing)
+    assert module._source_revision() == "feedbeef"
+
+    class Failed:
+        returncode = 1
+        stdout = ""
+
+    monkeypatch.setattr(module.subprocess, "run", lambda *a, **k: Failed())
+    assert module._source_revision() == "feedbeef"
+
+    class Resolved:
+        returncode = 0
+        stdout = "abc123\n"
+
+    monkeypatch.setattr(module.subprocess, "run", lambda *a, **k: Resolved())
+    assert module._source_revision() == "abc123"
