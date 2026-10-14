@@ -21,6 +21,7 @@ import json
 import subprocess
 import tempfile
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -98,25 +99,47 @@ def capture_first_request(
                 web_search=web_search,
                 model_catalog=model_catalog,
             )
-            process = subprocess.Popen(
-                [str(codex_bin), "exec", "--json", "--skip-git-repo-check",
-                 "--cd", str(workspace), "-"],
-                stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL, env={
-                    "CODEX_HOME": str(home), "HOME": temp,
-                    "PATH": "/usr/local/bin:/usr/bin:/bin",
-                    "OPENAI_API_KEY": "toolface-qualification",
-                    **(extra_env or {}),
-                },
-            )
-            try:
-                process.stdin.write(b"Reply with the word OK.\n")
-                process.stdin.close()
-                if not done.wait(timeout_sec):
-                    raise TimeoutError("Codex sent no request within the qualification window")
-            finally:
-                process.kill()
-                process.wait()
+            stderr_path = Path(temp) / "codex-stderr.log"
+            with stderr_path.open("wb") as stderr:
+                process = subprocess.Popen(
+                    [str(codex_bin), "exec", "--json", "--skip-git-repo-check",
+                     "--cd", str(workspace), "-"],
+                    stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                    stderr=stderr, env={
+                        "CODEX_HOME": str(home), "HOME": temp,
+                        "PATH": "/usr/local/bin:/usr/bin:/bin",
+                        "OPENAI_API_KEY": "toolface-qualification",
+                        **(extra_env or {}),
+                    },
+                )
+                try:
+                    process.stdin.write(b"Reply with the word OK.\n")
+                    process.stdin.close()
+                    deadline = time.monotonic() + timeout_sec
+                    while not done.is_set():
+                        if process.poll() is not None:
+                            # A client can reject its configuration (for
+                            # example a catalog entry it cannot parse) and die
+                            # before any HTTP request; surface its own words
+                            # instead of a silent qualification timeout.
+                            done.wait(0.5)
+                            if done.is_set():
+                                break
+                            tail = stderr_path.read_text(errors="replace")[-800:].strip()
+                            raise RuntimeError(
+                                "client exited before sending a request "
+                                f"(exit code {process.returncode}): {tail or 'no stderr'}"
+                            )
+                        if time.monotonic() > deadline:
+                            tail = stderr_path.read_text(errors="replace")[-800:].strip()
+                            raise TimeoutError(
+                                "Codex sent no request within the qualification "
+                                f"window; stderr tail: {tail or 'empty'}"
+                            )
+                        done.wait(0.2)
+                finally:
+                    process.kill()
+                    process.wait()
     finally:
         server.shutdown()
         thread.join()

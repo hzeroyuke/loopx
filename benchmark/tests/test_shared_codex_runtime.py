@@ -749,6 +749,9 @@ def test_toolface_qualification_captures_first_request_and_rejects_empty(tmp_pat
 import json, os, re, sys, urllib.request
 if sys.argv[1:2] == ["--version"]:
     print("codex-cli 0.0.0-fake"); raise SystemExit(0)
+if os.environ.get("FAKE_DIE"):
+    print("error: model catalog entry is missing field display_name", file=sys.stderr)
+    raise SystemExit(2)
 home = os.environ["CODEX_HOME"]
 config = open(os.path.join(home, "config.toml")).read()
 base = re.search(r'base_url = "([^"]+)"', config).group(1)
@@ -784,3 +787,9 @@ raise SystemExit(1)
         toolface.qualify_toolface(
             set(), codex_bin=fake, model="fixture-model", timeout_sec=30,
             extra_env={"FAKE_TOOLS": "[]", "FAKE_NO_NAMESPACE": "1"})
+    # A client that cannot parse its catalog dies before any request; the
+    # qualification must surface the client's own words, not a timeout.
+    with pytest.raises(RuntimeError, match="missing field display_name"):
+        toolface.qualify_toolface(
+            set(), codex_bin=fake, model="fixture-model", timeout_sec=30,
+            extra_env={"FAKE_DIE": "1"})

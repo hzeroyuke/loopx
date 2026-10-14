@@ -120,16 +120,21 @@ host prepares two inputs before staging:
       --receipt toolface-receipt.json
   ```
 
-  A minimal compatible entry declares the slug and capability fields and
-  leaves `tool_mode` unset:
-
-  ```json
-  {"models": [{"slug": "<gateway-alias>", "context_window": 258400,
-               "supports_search_tool": true,
-               "web_search_tool_type": "text_and_image",
-               "apply_patch_tool_type": "freeform",
-               "shell_type": "unified_exec"}]}
-  ```
+  Do not hand-write a "minimal" entry: the entry schema is internal to the
+  client and changes between versions. The pinned `codex-cli 0.151.0` refuses
+  to start without `display_name`, `model_messages`,
+  `supported_reasoning_levels`, `truncation_policy` and further
+  non-capability fields, while newer builds reject different omissions first
+  (a 0.162 alpha fails on a missing `display_name` alone) — all before any
+  HTTP request. Derive the entry instead: take a complete entry your pinned
+  binary already accepts (from its shipped catalog, or a gateway-published
+  catalog for an official model), copy it verbatim, and change only `slug`
+  to the gateway alias. The capability fields that shape the toolface
+  (`supports_search_tool`, `web_search_tool_type`, `apply_patch_tool_type`,
+  `shell_type`) are inherited from the donor entry; leave `tool_mode` unset
+  as above. Then qualify the pinned binary/catalog pair and keep the receipt
+  — a client that cannot parse the entry now fails the qualification fast
+  with its own stderr, instead of a silent timeout.
 
 ## Task entry and planning ablation
 
