@@ -67,6 +67,42 @@ class Execution:
         return self.mode in {"native-goal", "loopx-goal"}
 
 
+
+def validate_model_catalog(model_catalog: Path, model: str) -> dict:
+    """Admit only catalog entries that keep Codex's function-tool surface.
+
+    Real catalog entries are not capability-only. ``tool_mode`` selects how
+    tools are delivered: with a valid ``code_mode_only`` entry the real client
+    sends ``tools: []`` on its first request, silently removing every task
+    tool. ``model_messages`` injects prompt content. A file that merely exists
+    therefore proves nothing; reject surfaces this before a trial instead of
+    recording an empty-toolface run as model capability.
+    """
+    if not model_catalog.is_file():
+        raise ValueError(f"model catalog missing: {model_catalog}")
+    try:
+        catalog = json.loads(model_catalog.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"model catalog is not valid JSON: {model_catalog}") from error
+    models = catalog.get("models") if isinstance(catalog, dict) else None
+    if not isinstance(models, list):
+        raise ValueError('model catalog must be an object with a "models" list')
+    entries = [e for e in models if isinstance(e, dict) and e.get("slug") == model]
+    if not entries:
+        raise ValueError(
+            f"model catalog has no entry for {model!r}; staging it would leave "
+            "the model on unknown-slug behavior while appearing configured"
+        )
+    entry = entries[0]
+    tool_mode = entry.get("tool_mode")
+    if tool_mode is not None:
+        raise ValueError(
+            f"unsupported catalog tool_mode {tool_mode!r} for {model!r}: only the "
+            "default function-tool mode is qualified; a code-mode entry makes the "
+            "client send an empty tool list"
+        )
+    return entry
+
 def prepare_codex_home(
     home: Path,
     *,
@@ -88,9 +124,14 @@ def prepare_codex_home(
 
     ``model_catalog`` is required for slugs Codex does not ship built-in
     (e.g. gateway aliases such as ``gpt-5.6-sol``). Without a catalog entry
-    Codex treats the model as unknown and offers only ``exec``; ``web_search``,
-    ``apply_patch``, ``update_plan`` and ``write_stdin`` are silently omitted
-    from every request, so the ``web_search`` setting has no effect.
+    Codex treats the model as unknown and offers a reduced tool surface, and
+    the ``web_search`` setting has no effect. A catalog entry is not
+    capability-only: it can select a tool mode and carry ``model_messages``
+    that become prompt content. Entries whose tool mode would strip the
+    function-tool surface (for example ``code_mode_only``, which makes the
+    real client send ``tools: []``) are rejected before a trial; qualify a
+    pinned binary/catalog pair at the first-request boundary with
+    ``benchmark.runtime.toolface`` before relying on the rendered tools.
     """
     if not model or not effort:
         raise ValueError("model and effort are required")
@@ -102,8 +143,8 @@ def prepare_codex_home(
         raise ValueError("unsupported provider wire_api")
     if web_search not in {"disabled", "cached", "live"}:
         raise ValueError("unsupported web_search setting")
-    if model_catalog is not None and not model_catalog.is_file():
-        raise ValueError(f"model catalog missing: {model_catalog}")
+    if model_catalog is not None:
+        validate_model_catalog(model_catalog, model)
     home.mkdir(parents=True, exist_ok=True)
     settings = "\n".join(
         [
@@ -111,7 +152,9 @@ def prepare_codex_home(
             f"model_reasoning_effort = {json.dumps(effort)}",
         ]
         + (
-            [f"model_catalog_json = {json.dumps(str(model_catalog))}"]
+            # Codex resolves this path from its own working directory, not the
+            # caller's; a relative path validates here yet silently fails there.
+            [f"model_catalog_json = {json.dumps(str(model_catalog.resolve()))}"]
             if model_catalog is not None
             else []
         )

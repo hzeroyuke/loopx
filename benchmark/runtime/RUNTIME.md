@@ -94,15 +94,42 @@ host prepares two inputs before staging:
   the commit it verified during staging; a missing git binary takes the same
   fallback as a failed `rev-parse`.
 - Models served through gateway aliases that the pinned Codex binary does not
-  ship in its built-in catalog get only the bare `exec` tool: `web_search`,
-  `apply_patch`, `update_plan` and `write_stdin` are silently omitted from
-  every request, and the `web_search` setting has no effect. Stage a
-  `model-catalog.json` next to the offline Codex binary
+  ship in its built-in catalog get a reduced tool surface (with some binaries
+  only the bare `exec` tool), and the `web_search` setting has no effect.
+  Stage a `model-catalog.json` next to the offline Codex binary
   (`CODEX_OFFLINE_DIR`); the installer copies it into the container and the
   trial home references it via `model_catalog_json`. The `web_search` agent
-  kwarg then takes effect in the shared runtime (default remains
-  `disabled`). The catalog declares capabilities only; the requested model is
-  unchanged.
+  kwarg then takes effect in the shared runtime (default remains `disabled`),
+  and the requested model is unchanged.
+
+  A catalog entry is **not** capability-only. Real entries can select a tool
+  mode and carry `model_messages` that become prompt content; a valid
+  `code_mode_only` entry makes the real client send `tools: []`, which is
+  strictly worse than no catalog. The renderer therefore rejects entries whose
+  `tool_mode` is set, and rejects catalogs with no entry for the requested
+  model. Because configuration cannot prove delivered tools, qualify every
+  pinned binary/catalog pair once at the first-request boundary — a local
+  stub captures the request and stops inference with a deliberate 400, so no
+  credentials or model spend are involved — and keep the receipt with the
+  study:
+
+  ```bash
+  python3 -m benchmark.runtime.toolface --codex-bin "$CODEX_OFFLINE_DIR/codex" \
+      --model <gateway-alias> --model-catalog "$CODEX_OFFLINE_DIR/model-catalog.json" \
+      --web-search live --expect web_search --expect apply_patch \
+      --receipt toolface-receipt.json
+  ```
+
+  A minimal compatible entry declares the slug and capability fields and
+  leaves `tool_mode` unset:
+
+  ```json
+  {"models": [{"slug": "<gateway-alias>", "context_window": 258400,
+               "supports_search_tool": true,
+               "web_search_tool_type": "text_and_image",
+               "apply_patch_tool_type": "freeform",
+               "shell_type": "unified_exec"}]}
+  ```
 
 ## Task entry and planning ablation
 
